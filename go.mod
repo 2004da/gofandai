@@ -1,4 +1,4 @@
-module gofandai
+module https://github.com/2004da/gofandai
 
 go 1.23.1
 
