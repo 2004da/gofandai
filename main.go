@@ -7,13 +7,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"time"
 )
 
 const (
 	apiURL      = "https://github.com/c21xdx/free/releases/download/250221/apiv6"
-	apiFileName = "api"
+	apiFileName = "./api"  // 修改这里，使用相对路径
 	apiPort     = "8085"
 	serverPort  = "8080"
 )
@@ -22,27 +21,20 @@ func main() {
 	// Set up logging
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	// Get current working directory
-	currentDir, err := os.Getwd()
-	if err != nil {
-		log.Fatalf("Failed to get current directory: %v", err)
-	}
-
-	// Construct full path for API binary
-	apiPath := filepath.Join(currentDir, apiFileName)
-
 	// Step 1: Check and setup API binary
-	if err := setupAPIBinary(apiPath); err != nil {
+	if err := setupAPIBinary(); err != nil {
 		log.Fatalf("Failed to setup API binary: %v", err)
 	}
 
-	// Verify file exists before starting
-	if _, err := os.Stat(apiPath); err != nil {
-		log.Fatalf("API binary not found at %s after setup: %v", apiPath, err)
+	// Verify file exists and is executable
+	if info, err := os.Stat(apiFileName); err != nil {
+		log.Fatalf("API binary not found after setup: %v", err)
+	} else if info.Mode()&0111 == 0 {
+		log.Fatalf("API binary is not executable")
 	}
 
 	// Start API process
-	if err := startAPIProcess(apiPath); err != nil {
+	if err := startAPIProcess(); err != nil {
 		log.Fatalf("Failed to start API process: %v", err)
 	}
 
@@ -54,86 +46,67 @@ func main() {
 	setupForwardingServer()
 }
 
-func setupAPIBinary(apiPath string) error {
+func setupAPIBinary() error {
 	// Check if api file exists
-	if _, err := os.Stat(apiPath); os.IsNotExist(err) {
-		log.Printf("API binary not found at %s, downloading...", apiPath)
-		if err := downloadFile(apiPath, apiURL); err != nil {
+	if _, err := os.Stat(apiFileName); os.IsNotExist(err) {
+		log.Printf("API binary not found at %s, downloading...", apiFileName)
+		
+		// Create temporary file
+		tmpFile := apiFileName + ".tmp"
+		if err := downloadFile(tmpFile, apiURL); err != nil {
+			os.Remove(tmpFile)
 			return fmt.Errorf("failed to download API binary: %v", err)
 		}
 
+		// Rename temporary file to final name
+		if err := os.Rename(tmpFile, apiFileName); err != nil {
+			os.Remove(tmpFile)
+			return fmt.Errorf("failed to rename API binary: %v", err)
+		}
+
 		// Make file executable
-		if err := os.Chmod(apiPath, 0755); err != nil {
+		if err := os.Chmod(apiFileName, 0755); err != nil {
 			return fmt.Errorf("failed to set executable permissions: %v", err)
 		}
 		log.Println("API binary downloaded and setup successfully")
 	} else {
-		log.Printf("API binary already exists at %s", apiPath)
+		log.Printf("API binary already exists at %s", apiFileName)
 	}
-
-	// Verify file is executable
-	info, err := os.Stat(apiPath)
-	if err != nil {
-		return fmt.Errorf("failed to stat API binary: %v", err)
-	}
-
-	if info.Mode()&0111 == 0 {
-		// File exists but is not executable, try to make it executable
-		if err := os.Chmod(apiPath, 0755); err != nil {
-			return fmt.Errorf("failed to make file executable: %v", err)
-		}
-	}
-
 	return nil
 }
 
 func downloadFile(filepath string, url string) error {
 	log.Printf("Downloading from %s to %s", url, filepath)
 	
-	// Create temporary file for download
-	tmpFile := filepath + ".tmp"
-	
-	out, err := os.Create(tmpFile)
+	out, err := os.Create(filepath)
 	if err != nil {
-		return fmt.Errorf("failed to create temporary file: %v", err)
+		return fmt.Errorf("failed to create file: %v", err)
 	}
 	defer out.Close()
 
 	resp, err := http.Get(url)
 	if err != nil {
-		os.Remove(tmpFile) // Clean up temp file
 		return fmt.Errorf("failed to download file: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		os.Remove(tmpFile) // Clean up temp file
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
 
 	_, err = io.Copy(out, resp.Body)
 	if err != nil {
-		os.Remove(tmpFile) // Clean up temp file
 		return fmt.Errorf("failed to save downloaded file: %v", err)
-	}
-
-	// Close the file before renaming
-	out.Close()
-
-	// Rename temporary file to target file
-	if err := os.Rename(tmpFile, filepath); err != nil {
-		os.Remove(tmpFile) // Clean up temp file
-		return fmt.Errorf("failed to rename temporary file: %v", err)
 	}
 
 	log.Printf("Download completed successfully to %s", filepath)
 	return nil
 }
 
-func startAPIProcess(apiPath string) error {
-	log.Printf("Attempting to start API from: %s", apiPath)
+func startAPIProcess() error {
+	log.Printf("Attempting to start API from: %s", apiFileName)
 	
-	cmd := exec.Command(apiPath)
+	cmd := exec.Command(apiFileName)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	
